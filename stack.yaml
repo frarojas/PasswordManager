@@ -1,0 +1,11 @@
+# stack.yaml
+
+resolver: lts-23.21  # Resolver de Stackage (puedes usar una versión diferente si lo prefieres)
+
+packages:
+- .  # El punto indica que el proyecto principal está en el directorio actual
+
+extra-deps: []  # Aquí puedes agregar dependencias adicionales si las necesitas
+
+# Otros ajustes opcionales
+# system-ghc: true  # Usa el GHC del sistema si no se especifica otro
