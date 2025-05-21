@@ -85,7 +85,6 @@ loadUserPasswords appUsername = do
         jsonContent <- BL.hGetContents h
         case Aeson.decode jsonContent of
           Just entries -> do
-            putStrLn $ "pin: " ++ B.unpack pin ++ " entries: " ++ show entries
             return $ Just (pin, entries)
           Nothing -> do
             putStrLn $ "Error: Formato JSON inválido en " ++ filePath
