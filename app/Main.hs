@@ -19,6 +19,7 @@ import Control.Exception (try, SomeException)
 import System.Process (callCommand)
 import Control.Concurrent (threadDelay)
 import Text.Read (readMaybe)
+import Control.Monad.Trans.State (modify)
 
 -- Leer entrada oculta (para PIN o contraseñas)
 getHiddenInput :: String -> IO B.ByteString
@@ -204,6 +205,80 @@ viewPasswords key entries = do
           _ <- getLine
           return ()
 
+-- función encargada de modificar un campo de una entrada
+modifyPassword :: BA.ScrubbedBytes -> [PasswordEntry] -> IO [PasswordEntry]
+modifyPassword key entries = do
+  putStrLn "\n=== Modificar Entrada de Contraseña ==="
+  if null entries
+    then do
+      putStrLn "No hay contraseñas almacenadas."
+      putStrLn "Presione Enter para continuar..."
+      _ <- getLine
+      return entries
+    else do
+      -- Mostrar lista de entradas
+      putStrLn "Número | Servicio | Usuario"
+      putStrLn "-----------------------------"
+      zipWithM_
+        ( \(i :: Integer) entry -> do
+            putStrLn $ show i ++ ". " ++ service entry ++ " | " ++ username entry
+        )
+        [1 ..]
+        entries
+
+      -- Selección de entrada
+      putStr "Ingrese el número de la entrada a modificar: "
+      hFlush stdout
+      numStr <- getLine
+      case (readMaybe numStr :: Maybe Integer) of
+        Nothing -> do
+          putStrLn "Entrada inválida. Debe ingresar un número."
+          _ <- getLine
+          return entries
+        Just num -> do
+          if num > 0 && num <= fromIntegral (length entries)
+            then do
+              let index = fromIntegral num - 1
+              let entry = entries !! index
+
+              -- Menú de campo a modificar
+              putStrLn "\n¿Qué desea modificar?"
+              putStrLn "1. Nombre del servicio"
+              putStrLn "2. Nombre del usuario"
+              putStrLn "3. Contraseña"
+              putStr "Seleccione una opción (1-3): "
+              hFlush stdout
+              opt <- getLine
+
+              updatedEntry <- case opt of
+                "1" -> do
+                  putStr "Nuevo nombre del servicio: "
+                  hFlush stdout
+                  newService <- getLine
+                  return entry {service = newService}
+                "2" -> do
+                  putStr "Nuevo nombre de usuario: "
+                  hFlush stdout
+                  newUser <- getLine
+                  return entry {username = newUser}
+                "3" -> do
+                  newPassword <- getHiddenInput $ "Nueva contraseña para " ++ service entry ++ ": "
+                  encryptedPwd <- E.encryptText key newPassword
+                  return entry {encryptedPassword = encryptedPwd}
+                _ -> do
+                  putStrLn "Opción no válida. No se realizaron cambios."
+                  return entry
+
+              -- Actualizar lista
+              let updatedEntries = take index entries ++ [updatedEntry] ++ drop (index + 1) entries
+              savePasswords updatedEntries
+              putStrLn "Entrada modificada exitosamente."
+              return updatedEntries
+            else do
+              putStrLn "Número de entrada inválido."
+              return entries
+
+
 mainMenu :: BA.ScrubbedBytes -> [PasswordEntry] -> IO ()
 mainMenu key entries = do
   putStrLn "\n===== Password Manager ====="
@@ -222,7 +297,9 @@ mainMenu key entries = do
     "2" -> do
       updatedEntries <- addPassword key entries
       mainMenu key updatedEntries
-    "3" -> putStrLn "Función: Modificar contraseña (pendiente)" >> mainMenu key entries
+    "3" -> do
+      updatedEntries <- modifyPassword key entries
+      mainMenu key updatedEntries 
     "4" -> putStrLn "Función: Eliminar contraseña (pendiente)" >> mainMenu key entries
     "5" -> putStrLn "Saliendo..."
     _   -> putStrLn "Opción no válida." >> mainMenu key entries
