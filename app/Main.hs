@@ -6,28 +6,27 @@ module Main (main) where
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteArray as BA
-import Control.Monad (zipWithM_)
-import System.Directory (doesFileExist)
+import Control.Monad (zipWithM_, void, forM) -- Added void and forM
+import System.Directory (doesFileExist, createDirectoryIfMissing)
 import qualified Encryption as E
-import System.IO (hFlush, stdout)
-import System.IO (hSetEcho, stdin)
+import System.IO (hFlush, stdout, hSetEcho, stdin, withFile, IOMode(..)) -- Removed Handle
 import qualified Data.Aeson as Aeson
-import Data.Aeson ((.:), (.=), FromJSON(..), ToJSON(..))
+import Data.Aeson ((.:), (.=), FromJSON(..), ToJSON(..)) -- Removed object
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as Base64
-import Control.Exception (try, SomeException)
+import Control.Exception (try, SomeException, IOException, catch)
 import System.Process (callCommand)
 import Control.Concurrent (threadDelay)
 import Text.Read (readMaybe)
-import Control.Monad.Trans.State (modify)
+import Control.Monad.Trans.RWS (put)
 
 -- Leer entrada oculta (para PIN o contraseñas)
 getHiddenInput :: String -> IO B.ByteString
 getHiddenInput prompt = do
   putStr prompt >> hFlush stdout
-  hSetEcho stdin False
+  _ <- hSetEcho stdin False
   input <- getLine
-  hSetEcho stdin True
+  _ <- hSetEcho stdin True
   putStrLn ""
   return $ B.pack input
 
@@ -36,7 +35,7 @@ data PasswordEntry = PasswordEntry
   { service :: String
   , username :: String
   , encryptedPassword :: B.ByteString
-  } deriving (Show)
+  } deriving (Show, Eq)
 
 -- Creando instancias JSON para serialización/deserialización
 instance ToJSON PasswordEntry where
@@ -56,40 +55,66 @@ instance FromJSON PasswordEntry where
       Right pwd -> return $ PasswordEntry srv usr pwd
       Left err -> fail $ "Error decoding password: " ++ err
 
--- Ruta al archivo de contraseñas
-passwordFile :: String
-passwordFile = "passwords.json"
+-- Ruta al directorio de datos de usuario
+userDataDir :: String
+userDataDir = "data/"
 
--- Función para guardar contraseñas en un archivo JSON
-savePasswords :: [PasswordEntry] -> IO ()
-savePasswords entries = do
-  let json = Aeson.encode entries
-  BL.writeFile passwordFile json
-  putStrLn $ "Contraseñas guardadas en " ++ passwordFile
+-- Construir la ruta al archivo de contraseñas del usuario
+userPasswordFile :: String -> String
+userPasswordFile appUsername = userDataDir ++ appUsername ++ ".json"
 
--- Función para cargar contraseñas desde un archivo JSON
-loadPasswords :: IO [PasswordEntry]
-loadPasswords = do
-  fileExists <- doesFileExist passwordFile
+-- Función para guardar contraseñas y PIN de un usuario
+saveUserPasswords :: String -> B.ByteString -> [PasswordEntry] -> IO ()
+saveUserPasswords appUsername pin entries = do
+  createDirectoryIfMissing True userDataDir
+  let filePath = userPasswordFile appUsername
+      json = Aeson.encode entries
+  withFile filePath WriteMode $ \h -> do
+    B.hPutStrLn h pin 
+    BL.hPutStr h json 
+
+-- Función para cargar PIN y contraseñas de un usuario
+loadUserPasswords :: String -> IO (Maybe (B.ByteString, [PasswordEntry]))
+loadUserPasswords appUsername = do
+  let filePath = userPasswordFile appUsername
+  fileExists <- doesFileExist filePath
   if fileExists
+    then catch (do
+      withFile filePath ReadMode $ \h -> do
+        pin <- B.hGetLine h
+        jsonContent <- BL.hGetContents h
+        case Aeson.decode jsonContent of
+          Just entries -> do
+            putStrLn $ "pin: " ++ B.unpack pin ++ " entries: " ++ show entries
+            return $ Just (pin, entries)
+          Nothing -> do
+            putStrLn $ "Error: Formato JSON inválido en " ++ filePath
+            return Nothing)
+      (\(e :: IOException) -> do
+        putStrLn $ "Error al leer el archivo " ++ filePath ++ ": " ++ show e
+        return Nothing)
+    else return Nothing
+
+-- Función para crear un nuevo usuario
+createNewUser :: String -> IO (Maybe (B.ByteString, [PasswordEntry]))
+createNewUser appUsername = do
+  putStrLn $ "El usuario '" ++ appUsername ++ "' no existe."
+  putStr "Desea crear un nuevo usuario? (s/n): "
+  hFlush stdout
+  confirm <- getLine
+  if confirm == "s" || confirm == "S"
     then do
-      result <- try $ do
-        content <- BL.readFile passwordFile
-        case Aeson.eitherDecode content of
-          Right entries -> return entries
-          Left err -> do
-            putStrLn $ "Error decodificando el archivo de contraseñas: " ++ err
-            return []
-      case result of
-        Right entries -> return entries
-        Left (e :: SomeException) -> do
-          putStrLn $ "Error leyendo el archivo de contraseñas: " ++ show e
-          return []
-    else return []
+      newPin <- getHiddenInput "Ingrese un nuevo PIN para este usuario (numérico recomendado): "
+      saveUserPasswords appUsername newPin [] 
+      putStrLn $ "Usuario '" ++ appUsername ++ "' creado exitosamente."
+      return $ Just (newPin, [])
+    else do
+      putStrLn "Creación de usuario cancelada."
+      return Nothing
 
 -- Función para agregar una nueva contraseña
-addPassword :: BA.ScrubbedBytes -> [PasswordEntry] -> IO [PasswordEntry]
-addPassword key entries = do
+addPassword :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
+addPassword key appUsername userPin entries = do
   putStrLn "\n=== Agregar Nueva Contraseña ==="
   putStr "Servicio o sitio web: "
   hFlush stdout
@@ -97,7 +122,7 @@ addPassword key entries = do
   
   putStr "Nombre de usuario o correo: "
   hFlush stdout
-  userName <- getLine
+  serviceUserName <- getLine 
   
   plainPassword <- getHiddenInput "Contraseña: "
   
@@ -105,13 +130,12 @@ addPassword key entries = do
   encryptedPwd <- E.encryptText key plainPassword
   let newEntry = PasswordEntry 
         { service = serviceName
-        , username = userName
+        , username = serviceUserName 
         , encryptedPassword = encryptedPwd
         }
       updatedEntries = newEntry : entries
       
-  -- Guardar las contraseñas actualizadas
-  savePasswords updatedEntries
+  saveUserPasswords appUsername userPin updatedEntries
   putStrLn "Contraseña agregada exitosamente."
   
   return updatedEntries
@@ -206,9 +230,9 @@ viewPasswords key entries = do
           return ()
 
 -- función encargada de modificar un campo de una entrada
-modifyPassword :: BA.ScrubbedBytes -> [PasswordEntry] -> IO [PasswordEntry]
-modifyPassword key entries = do
-  putStrLn "\n=== Modificar Entrada de Contraseña ==="
+modifyPassword :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
+modifyPassword key appUsername userPin entries = do
+  putStrLn $ "\n=== Modificar Entrada de Contraseña para " ++ appUsername ++ " ==="
   if null entries
     then do
       putStrLn "No hay contraseñas almacenadas."
@@ -271,17 +295,17 @@ modifyPassword key entries = do
 
               -- Actualizar lista
               let updatedEntries = take index entries ++ [updatedEntry] ++ drop (index + 1) entries
-              savePasswords updatedEntries
+              saveUserPasswords appUsername userPin updatedEntries
               putStrLn "Entrada modificada exitosamente."
               return updatedEntries
             else do
               putStrLn "Número de entrada inválido."
               return entries
 
-
-mainMenu :: BA.ScrubbedBytes -> [PasswordEntry] -> IO ()
-mainMenu key entries = do
+mainMenu :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO ()
+mainMenu key appUsername userPin entries = do
   putStrLn "\n===== Password Manager ====="
+  putStrLn $ "Usuario: " ++ appUsername
   putStrLn "1. Ver contraseñas"
   putStrLn "2. Agregar nueva contraseña"
   putStrLn "3. Modificar contraseña"
@@ -293,22 +317,43 @@ mainMenu key entries = do
   case choice of
     "1" -> do
       viewPasswords key entries
-      mainMenu key entries
+      mainMenu key appUsername userPin entries
     "2" -> do
-      updatedEntries <- addPassword key entries
-      mainMenu key updatedEntries
+      updatedEntries <- addPassword key appUsername userPin entries
+      mainMenu key appUsername userPin updatedEntries
     "3" -> do
-      updatedEntries <- modifyPassword key entries
-      mainMenu key updatedEntries 
-    "4" -> putStrLn "Función: Eliminar contraseña (pendiente)" >> mainMenu key entries
+      updatedEntries <- modifyPassword key appUsername userPin entries
+      mainMenu key appUsername userPin updatedEntries
+    "4" -> do
+      putStrLn "Función de eliminación no implementada."
+      mainMenu key appUsername userPin entries
     "5" -> putStrLn "Saliendo..."
-    _   -> putStrLn "Opción no válida." >> mainMenu key entries
+    _ -> do
+      putStrLn "Opción no válida, intente de nuevo."
+      mainMenu key appUsername userPin entries
 
 main :: IO ()
 main = do
-  pin <- getHiddenInput "Ingrese su PIN: "
-  let key = E.generateKey pin
-  -- Cargar las contraseñas existentes
-  entries <- loadPasswords
-  putStrLn "Autenticación exitosa."
-  mainMenu key entries
+  putStr "Ingrese su nombre de usuario: "
+  hFlush stdout
+  appUsername_main <- getLine 
+
+  loadedData <- loadUserPasswords appUsername_main
+  
+  case loadedData of
+    Just (storedPin, entries) -> do
+      inputPin <- getHiddenInput "Ingrese su PIN: "
+      if inputPin == storedPin
+        then do
+          let key = E.generateKey inputPin
+          putStrLn "Autenticación exitosa."
+          mainMenu key appUsername_main inputPin entries
+        else do
+          putStrLn "PIN incorrecto. Saliendo."
+    Nothing -> do
+      maybeNewUserData <- createNewUser appUsername_main
+      case maybeNewUserData of
+        Just (newPin, newEntries) -> do
+          let key = E.generateKey newPin
+          mainMenu key appUsername_main newPin newEntries
+        Nothing -> putStrLn "Saliendo."
