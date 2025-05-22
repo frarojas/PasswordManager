@@ -16,7 +16,6 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as Base64
 import Control.Exception (try, SomeException, IOException, catch)
 import System.Process (callCommand)
-import Control.Concurrent (threadDelay)
 import Text.Read (readMaybe)
 import Control.Monad.Trans.RWS (put)
 
@@ -160,29 +159,9 @@ copyToClipboard text = do
     escapeChar '\'' = "''"  -- Escapar comillas simples para PowerShell
     escapeChar c    = [c]
 
--- Función para limpiar el portapapeles
-clearClipboard :: IO ()
-clearClipboard = do
-  -- Limpiar portapapeles copiando una cadena vacía
-  _ <- (try $ callCommand "powershell -Command \"echo off | clip\"") :: IO (Either SomeException ())
-  return ()
-
 -- Función para enmascarar el nombre de usuario
 maskUsername :: String -> String
 maskUsername u = take 4 u ++ replicate (max 0 (8 - length (take 4 u))) '*'
-
--- Función para copiar contraseña al portapapeles y limpiar después de un tiempo
-copyToClipboardWithTimeout :: String -> IO ()
-copyToClipboardWithTimeout text = do
-  copied <- copyToClipboard text
-  if copied
-    then do
-      putStrLn "Contraseña copiada al portapapeles. Se borrará en 30 segundos."
-      threadDelay (30 * 1000000) -- 30 segundos
-      clearClipboard
-      putStrLn "Portapapeles limpiado."
-    else
-      putStrLn "No se pudo copiar la contraseña al portapapeles. Asegúrese de que 'powershell' esté disponible."
 
 -- Función para mostrar contraseñas almacenadas
 viewPasswords :: BA.ScrubbedBytes -> [PasswordEntry] -> IO ()
@@ -226,7 +205,11 @@ viewPasswords key entries = do
           hFlush stdout
           copyChoice <- getLine
           if copyChoice == "s" || copyChoice == "S"
-            then copyToClipboardWithTimeout (B.unpack decryptedPassword)
+            then do
+              copied <- copyToClipboard (B.unpack decryptedPassword)
+              if copied
+                then putStrLn "Contraseña copiada al portapapeles."
+                else putStrLn "No se pudo copiar la contraseña al portapapeles. Asegúrese de que 'powershell' esté disponible."
             else return ()
         else
           putStrLn "Operación cancelada."
