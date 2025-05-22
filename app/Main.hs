@@ -244,14 +244,17 @@ modifyPassword key appUsername userPin entries = do
       return entries
     else do
       -- Mostrar lista de entradas
-      putStrLn "Número | Servicio | Usuario"
-      putStrLn "-----------------------------"
-      zipWithM_
-        ( \(i :: Integer) entry -> do
-            putStrLn $ show i ++ ". " ++ service entry ++ " | " ++ username entry
-        )
-        [1 ..]
-        entries
+      putStrLn "\n=== Contraseñas Almacenadas ==="
+      putStrLn "-------------------------------------------------------------"
+      putStrLn "| índice | Servicio        | Usuario  | Contraseña |"
+      putStrLn "-------------------------------------------------------------"
+      mapM_ (\(idx, entry) ->
+        putStrLn $ "| " ++ padRight 6 (show idx) ++
+                  " | " ++ padRight 15 (service entry) ++
+                  " | " ++ padRight 8 (maskUsername (username entry)) ++
+                  " | " ++ padRight 10 "**********" ++ " |"
+        ) $ zip [1 :: Integer ..] entries
+      putStrLn "-------------------------------------------------------------"
 
       -- Selección de entrada
       putStr "Ingrese el número de la entrada a modificar: "
@@ -305,6 +308,65 @@ modifyPassword key appUsername userPin entries = do
               putStrLn "Número de entrada inválido."
               return entries
 
+-- Función para eliminar una contraseña
+deletePassword :: String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
+deletePassword appUsername userPin entries = do
+  putStrLn "\n=== Eliminar Contraseña ==="
+  if null entries
+    then do
+      putStrLn "No hay contraseñas almacenadas para eliminar."
+      putStrLn "Presione Enter para continuar..."
+      _ <- getLine
+      return entries
+    else do
+      -- Mostrar lista de entradas (similar a viewPasswords pero simplificado)
+      putStrLn "\n=== Contraseñas Almacenadas ==="
+      putStrLn "-------------------------------------------------------------"
+      putStrLn "| índice | Servicio        | Usuario  | Contraseña |"
+      putStrLn "-------------------------------------------------------------"
+      mapM_
+        ( \(idx, entry) ->
+            putStrLn $
+              "| "
+                ++ padRight 6 (show idx)
+                ++ " | "
+                ++ padRight 15 (service entry)
+                ++ " | "
+                ++ padRight 8 (maskUsername (username entry))
+                ++ " | "
+                ++ padRight 10 "**********"
+                ++ " |"
+        )
+        $ zip [1 :: Integer ..] entries
+      putStrLn "-------------------------------------------------------------"
+
+      -- Solicitar selección
+      putStr "Ingrese el número de la contraseña a eliminar (o Enter para cancelar): "
+      hFlush stdout
+      numStr <- getLine
+
+      case readMaybe numStr :: Maybe Integer of
+        Just num | num > 0 && num <= fromIntegral (length entries) -> do
+          -- Confirmar eliminación
+          let entryToDelete = entries !! (fromIntegral num - 1)
+          putStrLn $ "\n¿Está seguro que desea eliminar la contraseña para " ++ service entryToDelete ++ "?"
+          putStr "Ingrese 's' para confirmar: "
+          hFlush stdout
+          confirm <- getLine
+
+          if confirm == "s" || confirm == "S"
+            then do
+              let updatedEntries = take (fromIntegral num - 1) entries ++ drop (fromIntegral num) entries
+              saveUserPasswords appUsername userPin updatedEntries
+              putStrLn "Contraseña eliminada exitosamente."
+              return updatedEntries
+            else do
+              putStrLn "Operación cancelada."
+              return entries
+        _ -> do
+          putStrLn "Operación cancelada o número inválido."
+          return entries
+
 mainMenu :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO ()
 mainMenu key appUsername userPin entries = do
   putStrLn "\n===== Password Manager ====="
@@ -328,8 +390,8 @@ mainMenu key appUsername userPin entries = do
       updatedEntries <- modifyPassword key appUsername userPin entries
       mainMenu key appUsername userPin updatedEntries
     "4" -> do
-      putStrLn "Función de eliminación no implementada."
-      mainMenu key appUsername userPin entries
+      updatedEntries <- deletePassword appUsername userPin entries
+      mainMenu key appUsername userPin updatedEntries
     "5" -> putStrLn "Saliendo..."
     _ -> do
       putStrLn "Opción no válida, intente de nuevo."
