@@ -9,15 +9,15 @@ import qualified Data.ByteArray as BA
 import Control.Monad (zipWithM_, void, forM) -- Added void and forM
 import System.Directory (doesFileExist, createDirectoryIfMissing)
 import qualified Encryption as E
-import System.IO (hFlush, stdout, hSetEcho, stdin, withFile, IOMode(..)) -- Removed Handle
+import System.IO (hFlush, stdout, hSetEcho, stdin, withFile, IOMode(..))
 import qualified Data.Aeson as Aeson
-import Data.Aeson ((.:), (.=), FromJSON(..), ToJSON(..)) -- Removed object
+import Data.Aeson ((.:), (.=), FromJSON(..), ToJSON(..))
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as Base64
 import Control.Exception (try, SomeException, IOException, catch)
 import System.Process (callCommand)
 import Text.Read (readMaybe)
-import Control.Monad.Trans.RWS (put)
+import Data.Char (isDigit)
 
 -- Leer entrada oculta (para PIN o contraseñas)
 getHiddenInput :: String -> IO B.ByteString
@@ -99,6 +99,10 @@ loadUserPasswords appUsername = do
         return Nothing)
     else return Nothing
 
+-- Función para validar el PIN
+isValidPin :: String -> Bool
+isValidPin pin = length pin >= 4 && all isDigit pin
+
 -- Función para crear un nuevo usuario
 createNewUser :: String -> IO (Maybe (B.ByteString, [PasswordEntry]))
 createNewUser appUsername = do
@@ -108,13 +112,23 @@ createNewUser appUsername = do
   confirm <- getLine
   if confirm == "s" || confirm == "S"
     then do
-      newPin <- getHiddenInput "Ingrese un nuevo PIN para este usuario (numérico recomendado): "
-      saveUserPasswords appUsername newPin [] 
+      newPinBS <- loopForPin
+      saveUserPasswords appUsername newPinBS [] 
       putStrLn $ "Usuario '" ++ appUsername ++ "' creado exitosamente."
-      return $ Just (newPin, [])
+      return $ Just (newPinBS, [])
     else do
       putStrLn "Creación de usuario cancelada."
       return Nothing
+  where
+    loopForPin :: IO B.ByteString
+    loopForPin = do
+      pinBS <- getHiddenInput "Ingrese un nuevo PIN para este usuario (numérico, al menos 4 dígitos): "
+      let pinStr = B.unpack pinBS
+      if isValidPin pinStr
+        then return pinBS
+        else do
+          putStrLn "PIN inválido. Debe ser numérico y tener al menos 4 dígitos."
+          loopForPin
 
 -- Función para agregar una nueva contraseña
 addPassword :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
