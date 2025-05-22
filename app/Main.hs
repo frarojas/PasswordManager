@@ -201,16 +201,25 @@ viewPasswords key entries = do
           putStrLn $ "Usuario: " ++ username selectedEntry
           putStrLn $ "Contraseña: " ++ B.unpack decryptedPassword
           putStrLn "================================="
-          putStr "\nDesea copiar la contraseña al portapapeles? (s/n): "
+          putStrLn "\n¿Qué desea copiar al portapapeles?"
+          putStrLn "1. Nombre de usuario"
+          putStrLn "2. Contraseña"
+          putStrLn "n. No copiar nada (o presione Enter)"
+          putStr "Seleccione una opción: "
           hFlush stdout
           copyChoice <- getLine
-          if copyChoice == "s" || copyChoice == "S"
-            then do
+          case copyChoice of
+            "1" -> do
+              copied <- copyToClipboard (username selectedEntry)
+              if copied
+                then putStrLn "Nombre de usuario copiado al portapapeles."
+                else putStrLn "No se pudo copiar el nombre de usuario. Asegúrese de que 'powershell' esté disponible."
+            "2" -> do
               copied <- copyToClipboard (B.unpack decryptedPassword)
               if copied
                 then putStrLn "Contraseña copiada al portapapeles."
-                else putStrLn "No se pudo copiar la contraseña al portapapeles. Asegúrese de que 'powershell' esté disponible."
-            else return ()
+                else putStrLn "No se pudo copiar la contraseña. Asegúrese de que 'powershell' esté disponible."
+            _   -> putStrLn "No se copió nada al portapapeles."
         else
           putStrLn "Operación cancelada."
     _ | null choiceStr -> return () -- Volver si se presiona Enter
