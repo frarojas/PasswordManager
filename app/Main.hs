@@ -167,6 +167,9 @@ copyToClipboard text = do
 maskUsername :: String -> String
 maskUsername u = take 4 u ++ replicate (max 0 (8 - length (take 4 u))) '*'
 
+padRight :: Int -> String -> String
+padRight n s = s ++ replicate (max 0 (n - length s)) ' '
+
 -- Función para mostrar contraseñas almacenadas
 viewPasswords :: BA.ScrubbedBytes -> [PasswordEntry] -> IO ()
 viewPasswords _ [] = do
@@ -232,9 +235,6 @@ viewPasswords key entries = do
       putStrLn "Presione Enter para continuar..."
       _ <- getLine
       viewPasswords key entries -- Llama recursivamente para nueva selección o salida
-  where
-    padRight :: Int -> String -> String
-    padRight n s = s ++ replicate (max 0 (n - length s)) ' '
 
 -- función encargada de modificar un campo de una entrada
 modifyPassword :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
