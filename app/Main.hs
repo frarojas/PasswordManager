@@ -6,7 +6,6 @@ module Main (main) where
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteArray as BA
-import Control.Monad (zipWithM_, void, forM) -- Added void and forM
 import System.Directory (doesFileExist, createDirectoryIfMissing)
 import qualified Encryption as E
 import System.IO (hFlush, stdout, hSetEcho, stdin, withFile, IOMode(..))
