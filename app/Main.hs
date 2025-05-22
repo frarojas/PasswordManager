@@ -81,11 +81,13 @@ loadUserPasswords appUsername = do
   if fileExists
     then catch (do
       withFile filePath ReadMode $ \h -> do
-        pin <- B.hGetLine h
+        pinFromFile <- B.hGetLine h
+        -- Limpiar el PIN de caracteres de nueva línea y retorno de carro
+        let cleanedPin = B.filter (\c -> c /= '\r' && c /= '\n') pinFromFile
         jsonContent <- BL.hGetContents h
         case Aeson.decode jsonContent of
           Just entries -> do
-            return $ Just (pin, entries)
+            return $ Just (cleanedPin, entries)
           Nothing -> do
             putStrLn $ "Error: Formato JSON inválido en " ++ filePath
             return Nothing)
