@@ -194,7 +194,7 @@ viewPasswords _ [] = do
 viewPasswords key entries = do
   putStrLn "\n=== Contraseñas Almacenadas ==="
   putStrLn "-------------------------------------------------------------"
-  putStrLn "| Índice | Servicio        | Usuario  | Contraseña |"
+  putStrLn "| índice | Servicio        | Usuario  | Contraseña |"
   putStrLn "-------------------------------------------------------------"
   mapM_ (\(idx, entry) ->
     putStrLn $ "| " ++ padRight 6 (show idx) ++
