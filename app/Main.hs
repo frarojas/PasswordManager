@@ -64,13 +64,17 @@ userPasswordFile appUsername = userDataDir ++ appUsername ++ ".json"
 
 -- Función para guardar contraseñas y PIN de un usuario
 saveUserPasswords :: String -> B.ByteString -> [PasswordEntry] -> IO ()
-saveUserPasswords appUsername pin entries = do
+saveUserPasswords appUsername plainPin entries = do
   createDirectoryIfMissing True userDataDir
   let filePath = userPasswordFile appUsername
+      -- Hashear el PIN antes de guardarlo
+      pinKeyBytes = E.generateKey plainPin -- BA.ScrubbedBytes
+      pinHashByteString = BA.convert pinKeyBytes :: B.ByteString
+      pinHashBase64 = Base64.encode pinHashByteString
       json = Aeson.encode entries
   withFile filePath WriteMode $ \h -> do
-    B.hPutStrLn h pin 
-    BL.hPutStr h json 
+    B.hPutStrLn h pinHashBase64 -- Guardar el hash del PIN en Base64
+    BL.hPutStr h json
 
 -- Función para cargar PIN y contraseñas de un usuario
 loadUserPasswords :: String -> IO (Maybe (B.ByteString, [PasswordEntry]))
@@ -344,13 +348,20 @@ main = do
   loadedData <- loadUserPasswords appUsername_main
   
   case loadedData of
-    Just (storedPin, entries) -> do
-      inputPin <- getHiddenInput "Ingrese su PIN: "
-      if inputPin == storedPin
+    Just (storedPinHashBase64, entries) -> do
+      inputPlainPin <- getHiddenInput "Ingrese su PIN: "
+
+      -- Hashear el PIN ingresado para comparación
+      let inputPinKeyBytes = E.generateKey inputPlainPin
+          inputPinHashByteString = BA.convert inputPinKeyBytes :: B.ByteString
+          inputPinHashBase64 = Base64.encode inputPinHashByteString
+
+      if inputPinHashBase64 == storedPinHashBase64
         then do
-          let key = E.generateKey inputPin
+          -- Generar la clave de cifrado a partir del PIN en texto plano ingresado
+          let key = E.generateKey inputPlainPin 
           putStrLn "Autenticación exitosa."
-          mainMenu key appUsername_main inputPin entries
+          mainMenu key appUsername_main inputPlainPin entries 
         else do
           putStrLn "PIN incorrecto. Saliendo."
     Nothing -> do
