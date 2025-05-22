@@ -165,68 +165,78 @@ clearClipboard = do
   _ <- (try $ callCommand "powershell -Command \"echo off | clip\"") :: IO (Either SomeException ())
   return ()
 
+-- Función para enmascarar el nombre de usuario
+maskUsername :: String -> String
+maskUsername u = take 4 u ++ replicate (max 0 (8 - length (take 4 u))) '*'
+
+-- Función para copiar contraseña al portapapeles y limpiar después de un tiempo
+copyToClipboardWithTimeout :: String -> IO ()
+copyToClipboardWithTimeout text = do
+  copied <- copyToClipboard text
+  if copied
+    then do
+      putStrLn "Contraseña copiada al portapapeles. Se borrará en 30 segundos."
+      threadDelay (30 * 1000000) -- 30 segundos
+      clearClipboard
+      putStrLn "Portapapeles limpiado."
+    else
+      putStrLn "No se pudo copiar la contraseña al portapapeles. Asegúrese de que 'powershell' esté disponible."
+
 -- Función para mostrar contraseñas almacenadas
 viewPasswords :: BA.ScrubbedBytes -> [PasswordEntry] -> IO ()
+viewPasswords _ [] = do
+  putStrLn "\nNo hay contraseñas almacenadas."
+  putStrLn "Presione Enter para continuar..."
+  _ <- getLine
+  return ()
 viewPasswords key entries = do
   putStrLn "\n=== Contraseñas Almacenadas ==="
-  if null entries
-    then do
-      putStrLn "No hay contraseñas almacenadas."
+  putStrLn "-------------------------------------------------------------"
+  putStrLn "| Índice | Servicio        | Usuario  | Contraseña |"
+  putStrLn "-------------------------------------------------------------"
+  mapM_ (\(idx, entry) ->
+    putStrLn $ "| " ++ padRight 6 (show idx) ++
+               " | " ++ padRight 15 (service entry) ++
+               " | " ++ padRight 8 (maskUsername (username entry)) ++
+               " | " ++ padRight 10 "**********" ++ " |"
+    ) $ zip [1 :: Integer ..] entries
+  putStrLn "-------------------------------------------------------------"
+
+  putStr "\nSeleccione el índice de la entrada para ver detalles (o presione Enter para volver): "
+  hFlush stdout
+  choiceStr <- getLine
+  case readMaybe choiceStr :: Maybe Integer of
+    Just choiceIdx | choiceIdx > 0 && choiceIdx <= fromIntegral (length entries) -> do
+      let selectedEntry = entries !! (fromIntegral choiceIdx - 1)
+      putStrLn "\n¡ADVERTENCIA! Va a mostrar información sensible."
+      putStr "Desea continuar? (s/n): "
+      hFlush stdout
+      confirm <- getLine
+      if confirm == "s" || confirm == "S"
+        then do
+          let decryptedPassword = E.decryptText key (encryptedPassword selectedEntry)
+          putStrLn "\n=== Detalles de la Contraseña ==="
+          putStrLn $ "Servicio: " ++ service selectedEntry
+          putStrLn $ "Usuario: " ++ username selectedEntry
+          putStrLn $ "Contraseña: " ++ B.unpack decryptedPassword
+          putStrLn "================================="
+          putStr "\nDesea copiar la contraseña al portapapeles? (s/n): "
+          hFlush stdout
+          copyChoice <- getLine
+          if copyChoice == "s" || copyChoice == "S"
+            then copyToClipboardWithTimeout (B.unpack decryptedPassword)
+            else return ()
+        else
+          putStrLn "Operación cancelada."
+    _ | null choiceStr -> return () -- Volver si se presiona Enter
+    _ -> do
+      putStrLn "Índice no válido."
       putStrLn "Presione Enter para continuar..."
       _ <- getLine
-      return ()
-    else do
-      putStrLn "Número | Servicio | Usuario | Contraseña"
-      putStrLn "--------------------------------------"
-      -- Crear una lista de contraseñas descifradas para usar después
-      decryptedPasswords <- mapM (\entry -> do
-          let plainPwd = E.decryptText key (encryptedPassword entry)
-          return (entry, plainPwd)
-        ) entries
-      
-      -- Mostrar las contraseñas
-      zipWithM_ (\(i :: Integer) (entry, plainPwd) -> do
-          putStrLn $ show i ++ ". " ++ service entry ++ " | " ++ 
-                     username entry ++ " | " ++ B.unpack plainPwd
-        ) [1..] decryptedPasswords
-      
-      putStrLn "\n¿Desea copiar alguna contraseña al portapapeles? (S/N): "
-      choice <- getLine
-      case choice of
-        "S" -> handleCopyPassword entries decryptedPasswords
-        "s" -> handleCopyPassword entries decryptedPasswords
-        _   -> return ()
+      viewPasswords key entries -- Llama recursivamente para nueva selección o salida
   where
-    handleCopyPassword :: [PasswordEntry] -> [(PasswordEntry, B.ByteString)] -> IO ()
-    handleCopyPassword entriesList decryptedPasswords = do
-      putStr "Ingrese el número de la contraseña a copiar: "
-      hFlush stdout
-      numStr <- getLine
-      case (readMaybe numStr :: Maybe Integer) of
-        Nothing -> do
-          putStrLn "Entrada inválida. Debe ingresar un número."
-          putStrLn "Presione Enter para continuar..."
-          _ <- getLine
-          return ()
-        Just num -> do
-          if num > 0 && num <= fromIntegral (length entriesList)
-            then do
-              let (_, plainPwd) = decryptedPasswords !! (fromIntegral num - 1)
-              success <- copyToClipboard (B.unpack plainPwd)
-              if success
-                then do
-                  putStrLn "Contraseña copiada al portapapeles. Se borrará en 30 segundos."
-                  -- Iniciar un hilo para limpiar el portapapeles después de 30 segundos
-                  threadDelay (30 * 1000000)  -- 30 segundos en microsegundos
-                  clearClipboard
-                  putStrLn "Portapapeles limpiado por seguridad."
-                else 
-                  putStrLn "Error al copiar la contraseña al portapapeles."
-            else
-              putStrLn "Número de entrada inválido."
-          putStrLn "Presione Enter para continuar..."
-          _ <- getLine
-          return ()
+    padRight :: Int -> String -> String
+    padRight n s = s ++ replicate (max 0 (n - length s)) ' '
 
 -- función encargada de modificar un campo de una entrada
 modifyPassword :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
