@@ -31,7 +31,8 @@ getHiddenInput prompt = do
 -- Tipo de datos para almacenar entradas de contraseñas
 data PasswordEntry = PasswordEntry
   { service :: String
-  , username :: String
+  , encryptedUsername :: B.ByteString
+  -- Almacenar el nombre de usuario como ByteString para compatibilidad con cifrado
   , encryptedPassword :: B.ByteString
   } deriving (Show, Eq)
 
@@ -39,19 +40,27 @@ data PasswordEntry = PasswordEntry
 instance ToJSON PasswordEntry where
   toJSON entry = Aeson.object
     [ "service" .= service entry
-    , "username" .= username entry
+    , "username" .= B.unpack (Base64.encode (encryptedUsername entry))
     , "password" .= B.unpack (Base64.encode (encryptedPassword entry))
     ]
 
 instance FromJSON PasswordEntry where
   parseJSON = Aeson.withObject "PasswordEntry" $ \v -> do
     srv <- v .: "service"
-    usr <- v .: "username"
-    pwdBase64Str <- v .: "password"
-    let pwdBase64 = B.pack pwdBase64Str
-    case Base64.decode pwdBase64 of
-      Right pwd -> return $ PasswordEntry srv usr pwd
-      Left err -> fail $ "Error decoding password: " ++ err
+    usr64str <- v .: "username"
+    pwd64str <- v .: "password"
+    let usr64 = B.pack usr64str
+        pwd64 = B.pack pwd64str
+        mUsr = Base64.decode usr64
+        mPwd = Base64.decode pwd64
+    case (mUsr, mPwd) of
+      (Right usr, Right pwd) ->
+        return $ PasswordEntry srv usr pwd
+      (Left e, _) ->
+        fail $ "Error decoding username: " ++ e
+      (_, Left e) ->
+        fail $ "Error decoding password: " ++ e
+
 
 -- Ruta al directorio de datos de usuario
 userDataDir :: String
@@ -143,11 +152,14 @@ addPassword key appUsername userPin entries = do
   
   plainPassword <- getHiddenInput "Contraseña: "
   
+  -- Encriptar el nombre de usuario
+  -- Se utiliza el mismo método de cifrado que para la contraseña
+  encUsername <- E.encryptText key (B.pack serviceUserName)
   -- Encriptar la contraseña
   encryptedPwd <- E.encryptText key plainPassword
   let newEntry = PasswordEntry 
         { service = serviceName
-        , username = serviceUserName 
+        , encryptedUsername = encUsername
         , encryptedPassword = encryptedPwd
         }
       updatedEntries = newEntry : entries
@@ -178,7 +190,7 @@ copyToClipboard text = do
 
 -- Función para enmascarar el nombre de usuario
 maskUsername :: String -> String
-maskUsername u = take 4 u ++ replicate (max 0 (8 - length (take 4 u))) '*'
+maskUsername u = take 4 u ++ replicate (4) '*'
 
 padRight :: Int -> String -> String
 padRight n s = s ++ replicate (max 0 (n - length s)) ' '
@@ -198,7 +210,7 @@ viewPasswords key entries = do
   mapM_ (\(idx, entry) ->
     putStrLn $ "| " ++ padRight 6 (show idx) ++
                " | " ++ padRight 15 (service entry) ++
-               " | " ++ padRight 8 (maskUsername (username entry)) ++
+               " | " ++ padRight 8 (maskUsername (B.unpack (E.decryptText key (encryptedUsername entry)))) ++
                " | " ++ padRight 10 "**********" ++ " |"
     ) $ zip [1 :: Integer ..] entries
   putStrLn "-------------------------------------------------------------"
@@ -215,10 +227,11 @@ viewPasswords key entries = do
       confirm <- getLine
       if confirm == "s" || confirm == "S"
         then do
+          let decryptedUsername = E.decryptText key (encryptedUsername selectedEntry)
           let decryptedPassword = E.decryptText key (encryptedPassword selectedEntry)
           putStrLn "\n=== Detalles de la Contraseña ==="
           putStrLn $ "Servicio: " ++ service selectedEntry
-          putStrLn $ "Usuario: " ++ username selectedEntry
+          putStrLn $ "Usuario: " ++ B.unpack decryptedUsername
           putStrLn $ "Contraseña: " ++ B.unpack decryptedPassword
           putStrLn "================================="
           putStrLn "\n¿Qué desea copiar al portapapeles?"
@@ -230,7 +243,7 @@ viewPasswords key entries = do
           copyChoice <- getLine
           case copyChoice of
             "1" -> do
-              copied <- copyToClipboard (username selectedEntry)
+              copied <- copyToClipboard (B.unpack decryptedUsername)
               if copied
                 then putStrLn "Nombre de usuario copiado al portapapeles."
                 else putStrLn "No se pudo copiar el nombre de usuario. Asegúrese de que 'powershell' esté disponible."
@@ -268,7 +281,7 @@ modifyPassword key appUsername userPin entries = do
       mapM_ (\(idx, entry) ->
         putStrLn $ "| " ++ padRight 6 (show idx) ++
                   " | " ++ padRight 15 (service entry) ++
-                  " | " ++ padRight 8 (maskUsername (username entry)) ++
+                  " | " ++ padRight 8 (maskUsername (B.unpack (E.decryptText key (encryptedUsername entry)))) ++
                   " | " ++ padRight 10 "**********" ++ " |"
         ) $ zip [1 :: Integer ..] entries
       putStrLn "-------------------------------------------------------------"
@@ -307,7 +320,8 @@ modifyPassword key appUsername userPin entries = do
                   putStr "Nuevo nombre de usuario: "
                   hFlush stdout
                   newUser <- getLine
-                  return entry {username = newUser}
+                  encryptedUser <- E.encryptText key (B.pack newUser)
+                  return entry {encryptedUsername = encryptedUser}
                 "3" -> do
                   newPassword <- getHiddenInput $ "Nueva contraseña para " ++ service entry ++ ": "
                   encryptedPwd <- E.encryptText key newPassword
@@ -326,8 +340,8 @@ modifyPassword key appUsername userPin entries = do
               return entries
 
 -- Función para eliminar una contraseña
-deletePassword :: String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
-deletePassword appUsername userPin entries = do
+deletePassword :: BA.ScrubbedBytes -> String -> B.ByteString -> [PasswordEntry] -> IO [PasswordEntry]
+deletePassword key appUsername userPin entries = do
   putStrLn "\n=== Eliminar Contraseña ==="
   if null entries
     then do
@@ -349,7 +363,7 @@ deletePassword appUsername userPin entries = do
                 ++ " | "
                 ++ padRight 15 (service entry)
                 ++ " | "
-                ++ padRight 8 (maskUsername (username entry))
+                ++ padRight 8 (maskUsername (B.unpack (E.decryptText key (encryptedUsername entry))))
                 ++ " | "
                 ++ padRight 10 "**********"
                 ++ " |"
@@ -407,7 +421,7 @@ mainMenu key appUsername userPin entries = do
       updatedEntries <- modifyPassword key appUsername userPin entries
       mainMenu key appUsername userPin updatedEntries
     "4" -> do
-      updatedEntries <- deletePassword appUsername userPin entries
+      updatedEntries <- deletePassword key appUsername userPin entries
       mainMenu key appUsername userPin updatedEntries
     "5" -> putStrLn "Saliendo..."
     _ -> do
